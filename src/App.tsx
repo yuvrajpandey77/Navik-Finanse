@@ -21,6 +21,7 @@ function App() {
   }, []);
 
   const fetchRequestCount = async () => {
+    if (!supabase) return;
     const { data } = await supabase
       .from('request_counter')
       .select('count')
@@ -32,6 +33,7 @@ function App() {
   };
 
   const incrementRequestCount = async () => {
+    if (!supabase) return;
     const { data } = await supabase
       .from('request_counter')
       .select('id, count')
@@ -49,6 +51,7 @@ function App() {
   };
 
   const saveMessage = async (message: string, role: 'user' | 'assistant') => {
+    if (!supabase) return;
     await supabase.from('chat_messages').insert({
       message,
       role,
@@ -59,11 +62,13 @@ function App() {
   const handleDocumentUpload = async (filename: string, content: string) => {
     setUploadedDocs(prev => [...prev, { filename, content }]);
 
-    await supabase.from('document_contexts').insert({
-      filename,
-      content,
-      session_id: sessionId,
-    });
+    if (supabase) {
+      await supabase.from('document_contexts').insert({
+        filename,
+        content,
+        session_id: sessionId,
+      });
+    }
   };
 
   const handleRemoveDoc = (filename: string) => {
@@ -71,41 +76,48 @@ function App() {
   };
 
   const callOpenAI = async (userMessage: string, context: string) => {
-    const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
-
-    if (!apiKey || apiKey === 'your_openai_api_key_here') {
-      return "Please configure your OpenAI API key in the .env file to use the chatbot.";
-    }
+    const payload = {
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'system' as const,
+          content: `You are a helpful financial assistant for Navik Finance. ${context ? `Use the following document context to answer questions: ${context}` : 'Provide accurate and helpful financial advice and information.'}`
+        },
+        {
+          role: 'user' as const,
+          content: userMessage
+        }
+      ],
+      temperature: 0.7,
+    };
 
     try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: 'gpt-3.5-turbo',
-          messages: [
-            {
-              role: 'system',
-              content: `You are a helpful financial assistant for Navik Finance. ${context ? `Use the following document context to answer questions: ${context}` : 'Provide accurate and helpful financial advice and information.'}`
-            },
-            {
-              role: 'user',
-              content: userMessage
-            }
-          ],
-          temperature: 0.7,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('OpenAI API request failed');
+      const apiUrl = import.meta.env.DEV ? '/api/chat' : 'https://api.openai.com/v1/chat/completions';
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (!import.meta.env.DEV) {
+        const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
+        if (!apiKey || apiKey === 'your_openai_api_key_here') {
+          return "Please configure your OpenAI API key in the .env file to use the chatbot.";
+        }
+        headers['Authorization'] = `Bearer ${apiKey}`;
       }
 
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+
       const data = await response.json();
-      return data.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
+
+      if (!response.ok) {
+        const errMsg = (data as { error?: { message?: string } })?.error?.message || response.statusText;
+        return `Error: ${errMsg}`;
+      }
+
+      return data.choices?.[0]?.message?.content ?? 'Sorry, I could not generate a response.';
     } catch (error) {
       console.error('Error calling OpenAI:', error);
       return 'Sorry, there was an error processing your request. Please try again.';
